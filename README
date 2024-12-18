@@ -1,0 +1,145 @@
+A basic example of how to process a payment with Solana using AWS Lambda's and Helius webhook.
+
+You would also need an index.html that does the following
+
+1) calls createTransaction(see below) on a button click, passing in what the user asked for
+
+```
+async function createTransaction() {
+    const productId = document.getElementById('product').value;
+    const loader = document.getElementById('loader');
+    const button = document.getElementById('create-transaction');
+    const statusMessage = document.getElementById('status-message');
+
+    // Collect shipping information
+    const shippingAddress = {
+        name: document.getElementById('name').value.trim() || "Current Resident",
+        street: document.getElementById('street').value,
+        city: document.getElementById('city').value,
+        state: document.getElementById('state').value,
+        zipCode: document.getElementById('zipCode').value
+    };
+
+    // Validate form
+    if (!shippingAddress.street ||
+        !shippingAddress.city || !shippingAddress.state ||
+        !shippingAddress.zipCode) {
+        alert('Please fill in all shipping information');
+        return;
+    }
+
+    // Show loader and disable button
+    loader.style.display = 'block';
+    button.disabled = true;
+
+    const createTxnEndpoint = 'https://XXXXXXXXXX.lambda-url.us-east-2.on.aws/';
+    const frequency = document.getElementById('frequency').value;
+    const duration = document.getElementById('duration').value;
+
+    const email = document.getElementById('email')?.value || '';
+
+    try {
+        const response = await fetch(createTxnEndpoint, {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            mode: 'cors',
+            body: JSON.stringify({
+                productId,
+                frequency,
+                duration,
+                shippingAddress,
+                email
+            }),
+        });
+
+        const data = await response.json();
+        console.log('Response:', { status: response.status, data });
+
+        if (response.ok) {
+            // Format the price to display with proper decimal places
+            const solAmount = (data.priceWithVerificationFee / 10 ** 9).toFixed(9);
+            // Add spaces every 3 characters for better readability
+            const formattedSolAmount = solAmount.replace(/(\d{3})/g, '$1 ').trim();
+
+            // Create a more detailed status message
+            statusMessage.innerHTML = `
+    < div style = "background: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 20px;" >
+                    <p><strong>Transaction Created!</strong></p>
+                    <p>Amount to Send: ${formattedSolAmount} SOL</p>
+                    <p>Wallet Address: XXXXXXXXXX</p>
+                    <div style="text-align: center;">
+                        <img src="solWallet.png" alt="Solana Wallet QR Code" style="max-width: 200px; margin: 10px 0;">
+                    </div>
+                    <p>Transaction ID: ${data.transactionId}</p>
+                    <p style="color: #666; font-size: 0.9em;">Please send exactly the above amount to the listed wallet address to complete your purchase. We will use this amount to associate your transaction with your transaction ID and shipping address. If you send the wrong amount, please <a href="mailto:hello@autopostage.com">message us</a> with the transaction ID.</p>
+                    <p>Please do not navigate away from this page until your transaction is complete.</p>
+                </div >
+    `;
+
+            pollTransactionStatus(data.transactionId);
+        } else {
+            statusMessage.textContent = 'Error creating transaction.';
+        }
+    } catch (error) {
+        console.error('Detailed error:', error);
+        statusMessage.textContent = `Error: ${ error.message } `;
+    } finally {
+        // Hide loader and enable button
+        loader.style.display = 'none';
+        button.disabled = false;
+    }
+}
+```
+
+2) then calls pollTxnStatus until it returns "completed", similar to code below
+
+
+    ```
+async function pollTransactionStatus(transactionId) {
+    const statusMessage = document.getElementById('status-message-updates');
+    let dots = 0;
+
+    // Separate animation loop for dots
+    const animateDots = () => {
+        if (statusMessage.textContent.includes('pending')) {
+            dots = (dots + 1) % 4;
+            statusMessage.textContent = 'Transaction is still pending' + '.'.repeat(dots);
+            setTimeout(animateDots, 500); // Animate dots every 500ms
+        }
+    };
+
+    const pollTxnEndpoint = 'https://XXXXXXXXXX.lambda-url.us-east-2.on.aws/'
+    const checkStatus = async () => {
+        const response = await fetch(pollTxnEndpoint, {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            mode: 'cors',
+            body: JSON.stringify({ transactionId }),
+        });
+        const data = await response.json();
+
+        if (response.ok && data.status === 'complete') {
+            statusMessage.textContent = 'Transaction is complete!';
+            showConfetti();
+
+            } else if (response.ok && data.status === 'pending') {
+            if (!statusMessage.textContent.includes('pending')) {
+                statusMessage.textContent = 'Transaction is still pending';
+                animateDots(); // Start dot animation
+            }
+        } else {
+            statusMessage.textContent = 'Error checking transaction status.';
+        }
+
+        // Retry after 5 seconds
+        setTimeout(checkStatus, 3000);
+    };
+
+    checkStatus();
+}```
